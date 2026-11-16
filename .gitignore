@@ -1,0 +1,8 @@
+.build/
+build/
+.swiftpm/
+*.dmg
+.DS_Store
+.wrangler/
+
+!dist/Launchpad-latest.dmg

@@ -1,0 +1,158 @@
+import AppKit
+import LaunchMatCore
+import SwiftUI
+
+/// `LaunchMat --mouse-test`: hands synthetic mouse events straight to the grid window (nothing is posted to the
+/// system, no permission needed) and checks how presses on icons and on blank space are read. Uses a fresh layout,
+/// saves nothing and opens no apps (launches are recorded instead). Prints PASS/FAIL per check.
+@MainActor
+enum MouseTest {
+    private static var failures = 0
+
+    static func run(model: LaunchpadModel) -> Never {
+        model.persistenceEnabled = false
+        var launched: [String] = []
+        model.launchHandler = { launched.append($0) }
+        model.load(fresh: true, sync: true)
+        let controller = LaunchWindowController(model: model)
+        let window = controller.window
+        // Started from a script, the app can't become active, and an inactive window would spend every press on
+        // activating itself. For the test only, the content takes clicks without being active.
+        window.contentView = TestHostingView(rootView: RootView(model: model))
+        controller.show()
+        wait(1.0)
+        let m = model.metrics
+        guard model.pageCount >= 2 else {
+            print("mouse test: needs at least two pages")
+            exit(1)
+        }
+
+        func send(_ type: NSEvent.EventType, _ p: CGPoint) {
+            // SwiftUI's root space has its origin top left; window coordinates bottom left.
+            let location = NSPoint(x: p.x, y: window.frame.height - p.y)
+            if let e = NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
+                                          timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                                          context: nil, eventNumber: 0, clickCount: 1,
+                                          pressure: type == .leftMouseUp ? 0 : 1) {
+                window.sendEvent(e)
+            }
+            wait(1.0 / 60)
+        }
+        /// Press at `start`, move by `by` in a few steps, check something mid-press, release.
+        func press(_ start: CGPoint, by: CGSize, steps: Int = 8, during: (() -> Void)? = nil) {
+            send(.leftMouseDown, start)
+            for i in 1...steps {
+                let f = CGFloat(i) / CGFloat(steps)
+                send(.leftMouseDragged, CGPoint(x: start.x + by.width * f, y: start.y + by.height * f))
+            }
+            during?()
+            send(.leftMouseUp, CGPoint(x: start.x + by.width, y: start.y + by.height))
+            wait(0.9)
+        }
+
+        // Blank space: the left margin, a gap between two icons, an empty slot.
+        let margin = CGPoint(x: m.gridRect.minX / 2, y: m.gridRect.midY)
+        press(margin, by: CGSize(width: -120, height: 0))
+        check("margin: drag left 120 pt turns to page 2", model.currentPage == 1)
+
+        let gap = CGPoint(x: m.cellCenter(0).x + m.cell.width / 2, y: m.iconCenter(0).y)
+        press(gap, by: CGSize(width: 120, height: 0))
+        check("gap between icons: drag right 120 pt turns back to page 1", model.currentPage == 0)
+
+        let last = model.layout.pages.count - 1
+        model.go(to: last)
+        wait(0.9)
+        if model.layout.pages[last].count < model.capacity {
+            let empty = m.iconCenter(model.layout.pages[last].count)
+            press(empty, by: CGSize(width: 120, height: 0))
+            check("empty slot: drag right 120 pt turns to the previous page", model.currentPage == last - 1)
+        } else {
+            print("SKIP  empty slot: the last page is full")
+        }
+        model.go(to: 0)
+        wait(0.9)
+
+        press(margin, by: CGSize(width: -30, height: 0))
+        check("margin: drag 30 pt springs back (under 50 pt)", model.currentPage == 0 && controller.isVisible)
+        press(margin, by: CGSize(width: 0, height: 60))
+        check("margin: vertical drag neither turns nor closes", model.currentPage == 0 && controller.isVisible)
+
+        // Icons.
+        let entry0 = model.layout.pages[0][0]
+        var dragDuring3pt = true
+        press(m.iconCenter(0), by: CGSize(width: 3, height: 0), steps: 3) { dragDuring3pt = model.drag != nil }
+        check("icon: moving 3 pt does not start a drag", !dragDuring3pt)
+        let clicked = entry0.appPath.map { launched.contains($0) } ?? (model.openFolder != nil)
+        check("icon: releasing after 3 pt is a click (opens it)", clicked)
+        if model.openFolder != nil { model.closeFolder(); wait(0.5) }
+
+        var grab = CGSize.zero, dragging = false
+        let grabbed = CGPoint(x: m.iconCenter(1).x + 15, y: m.iconCenter(1).y + 10)
+        launched.removeAll()
+        press(grabbed, by: CGSize(width: 0, height: 4), steps: 2) { dragging = model.drag != nil }
+        check("icon: moving 4 pt starts a drag", dragging)
+        press(grabbed, by: CGSize(width: 40, height: 0)) {
+            grab = model.drag?.grab ?? .zero
+        }
+        check("icon: the dragged icon keeps the grab point (15, 10) from its centre",
+              abs(grab.width - 15) < 0.5 && abs(grab.height - 10) < 0.5)
+        check("icon: a drag doesn't open anything", launched.isEmpty)
+
+        // Folders: drag one app onto another, approaching from the left, from the right and from two slots away,
+        // hold it there, and it becomes a folder. The layout is put back after each case.
+        func mergeTest(_ name: String, from source: Int, onto target: Int) {
+            model.go(to: 0)
+            wait(0.5)
+            let saved = model.layout
+            let page = model.layout.pages[0]
+            guard page.count > max(source, target), page[source].appPath != nil, page[target].appPath != nil else {
+                return print("SKIP  \(name)")
+            }
+            let targetEntry = page[target]
+            let folders = model.layout.folders.count
+            let from = m.iconCenter(source), to = m.iconCenter(target)
+            send(.leftMouseDown, from)
+            for i in 1...16 {
+                let f = CGFloat(i) / 16
+                send(.leftMouseDragged, CGPoint(x: from.x + (to.x - from.x) * f, y: from.y + (to.y - from.y) * f))
+            }
+            for _ in 0..<45 { send(.leftMouseDragged, to) } // hold about 0.75 s
+            send(.leftMouseUp, to)
+            wait(0.9)
+            let folder = model.layout.folders.values.first { $0.apps.contains(targetEntry.appPath!) }
+            check(name, model.layout.folders.count == folders + 1 && folder?.apps.contains(page[source].appPath!) == true)
+            if model.openFolder != nil { model.closeFolder(); wait(0.5) }
+            model.layout = saved
+            wait(0.5)
+        }
+        mergeTest("folder: app dragged from the left onto its neighbour", from: 2, onto: 3)
+        mergeTest("folder: app dragged from the right onto its neighbour", from: 4, onto: 3)
+        mergeTest("folder: app dragged across one slot onto an app", from: 1, onto: 3)
+
+        // Right-click: blank space opens the main menu, icons and the search field keep theirs.
+        check("right-click target: margin, gap and empty slot are blank, an icon and the search field are not",
+              model.isBlank(at: margin) && model.isBlank(at: gap) && model.isBlank(at: m.iconCenter(model.capacity - 1))
+              == (model.layout.pages[0].count < model.capacity)
+              && !model.isBlank(at: m.iconCenter(0)) && !model.isBlank(at: CGPoint(x: m.size.width / 2, y: m.topInset * 0.5)))
+
+        let blankClickVisible = controller.isVisible
+        press(margin, by: .zero, steps: 1)
+        check("margin: a click on blank space closes the grid", blankClickVisible && !controller.isVisible)
+
+        print(failures == 0 ? "ALL PASS" : "\(failures) FAILED")
+        exit(failures == 0 ? 0 : 1)
+    }
+
+    private static func wait(_ s: Double) { RunLoop.main.run(until: Date().addingTimeInterval(s)) }
+
+    private static func check(_ name: String, _ ok: Bool) {
+        print("\(ok ? "PASS" : "FAIL")  \(name)")
+        if !ok { failures += 1 }
+    }
+}
+
+/// The grid's content for `--mouse-test` and `--film-take`: takes a click even while the app isn't active (started from
+/// a script it may never become active, and the first press would be spent on activating the window).
+final class TestHostingView: NSHostingView<RootView> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
