@@ -472,9 +472,13 @@ struct GridInput: View {
                             let c = metrics.cellCenter(item.slot)
                             let frame = IconPress.frame(center: c, iconSize: s, cellWidth: metrics.cell.width * 0.94,
                                                         height: metrics.contentHeight + 12)
-                            if IconPress.isClick(v, frame: frame) { model.tap(item.entry) }
+                            if IconPress.isClick(v, frame: frame), !model.editingByLongPress || item.entry.folderID != nil { model.tap(item.entry) }
                         }
                     }
+            )
+            .simultaneousGesture(
+                LongPressGesture(minimumDuration: 0.55, maximumDistance: 4)
+                    .onEnded { _ in model.beginLongPressEditing() }
             )
             .onChange(of: pressed) { old, new in
                 if let old { model.gridLayers?.press(old, false) }
@@ -708,10 +712,14 @@ struct FolderAppCell: View {
                 .onEnded { v in
                     if model.drag != nil {
                         model.dragEnded()
-                    } else if IconPress.isClick(v, frame: frame) {
+                    } else if IconPress.isClick(v, frame: frame), !model.editingByLongPress {
                         model.tap(.app(path), inFolder: true)
                     }
                 }
+        )
+        .simultaneousGesture(
+            LongPressGesture(minimumDuration: 0.55, maximumDistance: 4)
+                .onEnded { _ in model.beginLongPressEditing() }
         )
     }
 }

@@ -173,6 +173,15 @@ enum SelfTest {
         // 13. Screens change while the grid is open (spec 12).
         screenChanges(model: model)
 
+        model.beginLongPressEditing()
+        model.optionHeld = false
+        check("long press: stays editing after Option is released", model.optionHeld && model.editingByLongPress)
+        model.endLongPressEditing()
+        check("long press: explicitly exits editing", !model.editingByLongPress)
+        model.beginLongPressEditing()
+        model.didHide()
+        check("long press: closing clears editing", !model.editingByLongPress && !model.optionHeld)
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILED")
         exit(failures == 0 ? 0 : 1)
     }

@@ -114,9 +114,25 @@ final class LaunchpadModel: ObservableObject {
     @Published var selected: Set<Entry> = []
     /// Option held: show uninstall badges (Launchpad's "jiggle" mode). Kept in `wiggle`, not in the model's published
     /// state: the grid's layers start and stop wiggling without re-evaluating the grid.
+    // 长按进入的编辑状态独立于键盘 Option 键，松手后仍保持抖动。
+    private(set) var editingByLongPress = false
+
+    func beginLongPressEditing() {
+        editingByLongPress = true
+        wiggle.on = true
+    }
+
+    func endLongPressEditing() {
+        editingByLongPress = false
+        optionHeld = NSEvent.modifierFlags.contains(.option)
+    }
+
     var optionHeld: Bool {
         get { wiggle.on }
-        set { if wiggle.on != newValue { wiggle.on = newValue } }
+        set {
+            let active = newValue || editingByLongPress
+            if wiggle.on != active { wiggle.on = active }
+        }
     }
     let wiggle = WiggleState()
     @Published private(set) var gridSize = GridSize.load()
@@ -873,6 +889,7 @@ final class LaunchpadModel: ObservableObject {
         openFolder = nil
         selection = nil
         selected.removeAll()
+        editingByLongPress = false
         optionHeld = false
         pager.x = 0
         saveNow()
@@ -1034,7 +1051,9 @@ final class LaunchpadModel: ObservableObject {
         let typing = !query.isEmpty
         switch e.keyCode {
         case 53: // esc
-            if whatsNew != nil {
+            if editingByLongPress {
+                endLongPressEditing()
+            } else if whatsNew != nil {
                 dismissWhatsNew()
             } else if openFolder != nil {
                 closeFolder()
