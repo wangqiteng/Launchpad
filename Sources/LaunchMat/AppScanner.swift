@@ -32,7 +32,7 @@ enum AppScanner {
         var byTarget: [String: Found] = [:]
         var order: [String] = []
         for f in found {
-            let key = f.target.path
+            let key = f.target.resolvingSymlinksInPath().standardizedFileURL.path
             if let kept = byTarget[key] {
                 if kept.isLink && !f.isLink { byTarget[key] = f }
             } else {
@@ -72,7 +72,7 @@ enum AppScanner {
     /// The entry at `url` for the app bundle at `target` (the same, unless `url` is a link to it).
     static func record(at url: URL, target: URL) -> AppRecord? {
         let info = Bundle(url: target)?.infoDictionary ?? [:]
-        if (info["LSBackgroundOnly"] as? Bool) == true { return nil }
+        if isExcluded(target: target, info: info) { return nil }
         var name = FileManager.default.displayName(atPath: target.path)
         if name.hasSuffix(".app") { name.removeLast(4) }
         let bundleName = (info["CFBundleDisplayName"] as? String) ?? (info["CFBundleName"] as? String) ?? name
@@ -88,6 +88,19 @@ enum AppScanner {
             isUtility: url.deletingLastPathComponent().lastPathComponent == "Utilities",
             keys: Search.keys(name: name, altName: bundleName,
                               otherNames: LocalizedNames.chinese(resources: target.appendingPathComponent("Contents/Resources")))
+        )
+    }
+
+    // 只过滤明确的内部入口，不使用 LSUIElement 一刀切隐藏菜单栏及系统工具。
+    static func isExcluded(target: URL, info: [String: Any]? = nil) -> Bool {
+        let metadata = info ?? Bundle(url: target)?.infoDictionary ?? [:]
+        let identifier = metadata["CFBundleIdentifier"] as? String ?? ""
+        let systemApp = target.path.hasPrefix("/System/Applications/")
+        return AppVisibility.excludes(
+            identifier: identifier,
+            backgroundOnly: (metadata["LSBackgroundOnly"] as? Bool) == true,
+            explicitlyHidden: (metadata["LSAppIsHidden"] as? Bool) == true,
+            systemApp: systemApp
         )
     }
 

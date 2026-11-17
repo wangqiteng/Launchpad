@@ -55,7 +55,9 @@ struct RootView: View {
                     PageDots(pager: model.pager, count: model.pageCount) { model.go(to: $0) }
                         .position(x: geo.size.width / 2, y: geo.size.height - m.bottomInset * 0.5)
                 }
-                .modifier(FolderBackdrop(presentation: model.folderPresentation))
+                .modifier(FolderBackdrop(presentation: model.folderPresentation,
+                                         hasFolder: model.openFolder != nil,
+                                         extracting: model.drag?.extracted == true))
 
                 if let id = model.openFolder {
                     // Comes and goes at once; the panel itself grows out of its icon and back (FolderMotion).
@@ -660,11 +662,16 @@ struct FolderOverlay: View {
 /// shrinks (spec C8/C9, folder.base).
 struct FolderBackdrop: ViewModifier {
     @ObservedObject var presentation: FolderPresentation
+    let hasFolder: Bool
+    let extracting: Bool
+
+    // 拖出文件夹时恢复底层网格，供用户选择放置位置。
+    private var dimmed: Bool { hasFolder && presentation.expanded && !extracting }
 
     func body(content: Content) -> some View {
         content
-            .scaleEffect(presentation.expanded ? FolderMotion.baseScale : 1)
-            .opacity(presentation.expanded ? FolderMotion.baseOpacity : 1)
+            .scaleEffect(dimmed ? FolderMotion.baseScale : 1)
+            .opacity(dimmed ? FolderMotion.baseOpacity : 1)
     }
 }
 

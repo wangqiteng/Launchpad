@@ -182,6 +182,14 @@ enum SelfTest {
         model.didHide()
         check("long press: closing clears editing", !model.editingByLongPress && !model.optionHeld)
 
+        if let folderID = model.layout.folders.keys.first {
+            model.open(folder: folderID)
+            model.didHide()
+            wait(0.4)
+            check("folder: delayed opening cannot hide grid after dismissal",
+                  model.openFolder == nil && !model.folderPresentation.expanded)
+        }
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILED")
         exit(failures == 0 ? 0 : 1)
     }

@@ -483,6 +483,12 @@ final class LaunchpadModel: ObservableObject {
         for r in records { dict[r.id] = r }
         apps = dict
         var l = layout
+        // 规则排除的已安装应用立即移除，避免被三天缺失宽限期留成空白图标。
+        for path in l.orderedApps where AppScanner.isExcluded(target: URL(fileURLWithPath: path)) {
+            l.remove(.app(path))
+            if let folder = l.folder(containing: path) { l.removeApp(path, fromFolder: folder) }
+            l.missingSince.removeValue(forKey: path)
+        }
         if l.isEmpty && l.folders.isEmpty {
             l = initialLayout(records)
         } else {
@@ -797,8 +803,11 @@ final class LaunchpadModel: ObservableObject {
         folderGeneration += 1
         folderPresentation.expanded = false
         openFolder = id
+        let generation = folderGeneration
         DispatchQueue.main.async { [weak self] in
-            withAnimation(FolderMotion.open) { self?.folderPresentation.expanded = true }
+            // 关闭或切换文件夹后，旧的展开回调不能重新隐藏网格。
+            guard let self, self.folderGeneration == generation, self.openFolder == id else { return }
+            withAnimation(FolderMotion.open) { self.folderPresentation.expanded = true }
         }
     }
 
@@ -879,6 +888,7 @@ final class LaunchpadModel: ObservableObject {
     }
 
     func didHide() {
+        folderGeneration += 1
         if drag != nil {
             cancelPendingMerge()
             dragEnded()
